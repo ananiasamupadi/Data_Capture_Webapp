@@ -23,19 +23,51 @@ if (isset($_POST['action']) || isset($_GET['action'])) {
     header('Content-Type: application/json');
 
     function generateClientCode($conn, $clientName) {
-        $alpha = strtoupper(substr(preg_replace('/[^A-Za-z]/', '', $clientName), 0, 3));
-        if (strlen($alpha) < 3) {
-            $alpha .= str_repeat('A', 3 - strlen($alpha));
+        // Remove non-alphabetic characters and split into words
+        $cleanName = preg_replace('/[^A-Za-z\s]/', '', $clientName);
+        $words = array_filter(explode(' ', trim($cleanName)));
+        
+        // Initialize the alphabetic part
+        $alpha = '';
+        
+        if (count($words) >= 3) {
+            // For names with 3 or more words, take first letter of each of first 3 words
+            $alpha = strtoupper(
+                substr($words[0], 0, 1) . 
+                (isset($words[1]) ? substr($words[1], 0, 1) : 'A') . 
+                (isset($words[2]) ? substr($words[2], 0, 1) : 'A')
+            );
+        } elseif (count($words) == 2) {
+            // For names with 2 words, take first letter of first word, first letter of second word, and second letter of second word
+            $alpha = strtoupper(
+                substr($words[0], 0, 1) . 
+                substr($words[1], 0, 1) . 
+                (strlen($words[1]) > 1 ? substr($words[1], 1, 1) : 'A')
+            );
+        } else {
+            // For single word or no valid words, take first 3 letters
+            $word = $words[0] ?? '';
+            $alpha = strtoupper(substr($word, 0, 3));
+            if (empty($alpha)) {
+                $alpha = 'AAA'; // Fallback for no valid input
+            }
         }
+        
+        // Generate unique code with 3-digit number
         $num = 1;
         do {
             $code = $alpha . sprintf("%03d", $num);
-            $query = "SELECT COUNT(*) as count FROM clients WHERE client_code = '$code'";
-            $result = mysqli_query($conn, $query);
+            $query = "SELECT COUNT(*) as count FROM clients WHERE client_code = ?";
+            $stmt = mysqli_prepare($conn, $query);
+            mysqli_stmt_bind_param($stmt, "s", $code);
+            mysqli_stmt_execute($stmt);
+            $result = mysqli_stmt_get_result($stmt);
             $row = mysqli_fetch_assoc($result);
             $exists = $row['count'] > 0;
+            mysqli_stmt_close($stmt);
             $num++;
         } while ($exists);
+        
         return $code;
     }
 
@@ -47,14 +79,16 @@ if (isset($_POST['action']) || isset($_GET['action'])) {
             echo json_encode(['error' => 'Client name is required.']);
             exit;
         }
-        $name = mysqli_real_escape_string($conn, $name);
         $client_code = generateClientCode($conn, $name);
-        $query = "INSERT INTO clients (name, client_code) VALUES ('$name', '$client_code')";
-        if (mysqli_query($conn, $query)) {
-            echo json_encode(['success' => 'Client created successfully.', 'client_id' => mysqli_insert_id($conn), 'client_code' => $client_code]);
+        $stmt = mysqli_prepare($conn, "INSERT INTO clients (name, client_code) VALUES (?, ?)");
+        mysqli_stmt_bind_param($stmt, "ss", $name, $client_code);
+        if (mysqli_stmt_execute($stmt)) {
+            $client_id = mysqli_insert_id($conn);
+            echo json_encode(['success' => 'Client created successfully.', 'client_id' => $client_id, 'client_code' => $client_code]);
         } else {
             echo json_encode(['error' => 'Error creating client: ' . mysqli_error($conn)]);
         }
+        mysqli_stmt_close($stmt);
         exit;
     }
 
@@ -70,15 +104,14 @@ if (isset($_POST['action']) || isset($_GET['action'])) {
             echo json_encode(['error' => 'Invalid email format.']);
             exit;
         }
-        $name = mysqli_real_escape_string($conn, $name);
-        $surname = mysqli_real_escape_string($conn, $surname);
-        $email = mysqli_real_escape_string($conn, $email);
-        $query = "INSERT INTO contacts (name, surname, email) VALUES ('$name', '$surname', '$email')";
-        if (mysqli_query($conn, $query)) {
+        $stmt = mysqli_prepare($conn, "INSERT INTO contacts (name, surname, email) VALUES (?, ?, ?)");
+        mysqli_stmt_bind_param($stmt, "sss", $name, $surname, $email);
+        if (mysqli_stmt_execute($stmt)) {
             echo json_encode(['success' => 'Contact created successfully.', 'contact_id' => mysqli_insert_id($conn)]);
         } else {
             echo json_encode(['error' => 'Email already exists or error: ' . mysqli_error($conn)]);
         }
+        mysqli_stmt_close($stmt);
         exit;
     }
 
@@ -89,12 +122,14 @@ if (isset($_POST['action']) || isset($_GET['action'])) {
             echo json_encode(['error' => 'Invalid client or contact ID.']);
             exit;
         }
-        $query = "INSERT INTO client_contacts (client_id, contact_id) VALUES ($client_id, $contact_id)";
-        if (mysqli_query($conn, $query)) {
+        $stmt = mysqli_prepare($conn, "INSERT INTO client_contacts (client_id, contact_id) VALUES (?, ?)");
+        mysqli_stmt_bind_param($stmt, "ii", $client_id, $contact_id);
+        if (mysqli_stmt_execute($stmt)) {
             echo json_encode(['success' => 'Contact linked successfully.']);
         } else {
             echo json_encode(['error' => 'Contact already linked or error: ' . mysqli_error($conn)]);
         }
+        mysqli_stmt_close($stmt);
         exit;
     }
 
@@ -105,12 +140,14 @@ if (isset($_POST['action']) || isset($_GET['action'])) {
             echo json_encode(['error' => 'Invalid client or contact ID.']);
             exit;
         }
-        $query = "DELETE FROM client_contacts WHERE client_id = $client_id AND contact_id = $contact_id";
-        if (mysqli_query($conn, $query)) {
+        $stmt = mysqli_prepare($conn, "DELETE FROM client_contacts WHERE client_id = ? AND contact_id = ?");
+        mysqli_stmt_bind_param($stmt, "ii", $client_id, $contact_id);
+        if (mysqli_stmt_execute($stmt)) {
             echo json_encode(['success' => 'Contact unlinked successfully.']);
         } else {
             echo json_encode(['error' => 'Error unlinking contact: ' . mysqli_error($conn)]);
         }
+        mysqli_stmt_close($stmt);
         exit;
     }
 
@@ -121,12 +158,14 @@ if (isset($_POST['action']) || isset($_GET['action'])) {
             echo json_encode(['error' => 'Invalid client or contact ID.']);
             exit;
         }
-        $query = "INSERT INTO client_contacts (client_id, contact_id) VALUES ($client_id, $contact_id)";
-        if (mysqli_query($conn, $query)) {
+        $stmt = mysqli_prepare($conn, "INSERT INTO client_contacts (client_id, contact_id) VALUES (?, ?)");
+        mysqli_stmt_bind_param($stmt, "ii", $client_id, $contact_id);
+        if (mysqli_stmt_execute($stmt)) {
             echo json_encode(['success' => 'Client linked successfully.']);
         } else {
             echo json_encode(['error' => 'Client already linked or error: ' . mysqli_error($conn)]);
         }
+        mysqli_stmt_close($stmt);
         exit;
     }
 
@@ -137,12 +176,14 @@ if (isset($_POST['action']) || isset($_GET['action'])) {
             echo json_encode(['error' => 'Invalid client or contact ID.']);
             exit;
         }
-        $query = "DELETE FROM client_contacts WHERE client_id = $client_id AND contact_id = $contact_id";
-        if (mysqli_query($conn, $query)) {
+        $stmt = mysqli_prepare($conn, "DELETE FROM client_contacts WHERE client_id = ? AND contact_id = ?");
+        mysqli_stmt_bind_param($stmt, "ii", $client_id, $contact_id);
+        if (mysqli_stmt_execute($stmt)) {
             echo json_encode(['success' => 'Client unlinked successfully.']);
         } else {
             echo json_encode(['error' => 'Error unlinking client: ' . mysqli_error($conn)]);
         }
+        mysqli_stmt_close($stmt);
         exit;
     }
 
@@ -152,23 +193,33 @@ if (isset($_POST['action']) || isset($_GET['action'])) {
             echo json_encode(['error' => 'Invalid client ID.']);
             exit;
         }
-        $result = mysqli_query($conn, "SELECT c.id, c.name, c.surname, c.email 
+        $stmt = mysqli_prepare($conn, "SELECT c.id, c.name, c.surname, c.email 
                                       FROM contacts c 
                                       INNER JOIN client_contacts cc ON c.id = cc.contact_id 
-                                      WHERE cc.client_id = $client_id 
+                                      WHERE cc.client_id = ? 
                                       ORDER BY c.surname, c.name");
+        mysqli_stmt_bind_param($stmt, "i", $client_id);
+        mysqli_stmt_execute($stmt);
+        $result = mysqli_stmt_get_result($stmt);
         $contacts = [];
         while ($row = mysqli_fetch_assoc($result)) {
             $contacts[] = $row;
         }
-        $result = mysqli_query($conn, "SELECT id, name, surname, email 
+        mysqli_stmt_close($stmt);
+
+        $stmt = mysqli_prepare($conn, "SELECT id, name, surname, email 
                                       FROM contacts 
-                                      WHERE id NOT IN (SELECT contact_id FROM client_contacts WHERE client_id = $client_id) 
+                                      WHERE id NOT IN (SELECT contact_id FROM client_contacts WHERE client_id = ?) 
                                       ORDER BY surname, name");
+        mysqli_stmt_bind_param($stmt, "i", $client_id);
+        mysqli_stmt_execute($stmt);
+        $result = mysqli_stmt_get_result($stmt);
         $available_contacts = [];
         while ($row = mysqli_fetch_assoc($result)) {
             $available_contacts[] = $row;
         }
+        mysqli_stmt_close($stmt);
+
         echo json_encode(['linked_contacts' => $contacts, 'available_contacts' => $available_contacts]);
         exit;
     }
@@ -179,23 +230,33 @@ if (isset($_POST['action']) || isset($_GET['action'])) {
             echo json_encode(['error' => 'Invalid contact ID.']);
             exit;
         }
-        $result = mysqli_query($conn, "SELECT c.id, c.name, c.client_code 
+        $stmt = mysqli_prepare($conn, "SELECT c.id, c.name, c.client_code 
                                       FROM clients c 
                                       INNER JOIN client_contacts cc ON c.id = cc.client_id 
-                                      WHERE cc.contact_id = $contact_id 
+                                      WHERE cc.contact_id = ? 
                                       ORDER BY c.name");
+        mysqli_stmt_bind_param($stmt, "i", $contact_id);
+        mysqli_stmt_execute($stmt);
+        $result = mysqli_stmt_get_result($stmt);
         $clients = [];
         while ($row = mysqli_fetch_assoc($result)) {
             $clients[] = $row;
         }
-        $result = mysqli_query($conn, "SELECT id, name, client_code 
+        mysqli_stmt_close($stmt);
+
+        $stmt = mysqli_prepare($conn, "SELECT id, name, client_code 
                                       FROM clients 
-                                      WHERE id NOT IN (SELECT client_id FROM client_contacts WHERE contact_id = $contact_id) 
+                                      WHERE id NOT IN (SELECT client_id FROM client_contacts WHERE contact_id = ?) 
                                       ORDER BY name");
+        mysqli_stmt_bind_param($stmt, "i", $contact_id);
+        mysqli_stmt_execute($stmt);
+        $result = mysqli_stmt_get_result($stmt);
         $available_clients = [];
         while ($row = mysqli_fetch_assoc($result)) {
             $available_clients[] = $row;
         }
+        mysqli_stmt_close($stmt);
+
         echo json_encode(['linked_clients' => $clients, 'available_clients' => $available_clients]);
         exit;
     }
@@ -259,13 +320,17 @@ if ($page == 'clients') {
 if ($page == 'client_form') {
     if (isset($_GET['id'])) {
         $id = (int)$_GET['id'];
-        $result = mysqli_query($conn, "SELECT * FROM clients WHERE id = $id");
+        $stmt = mysqli_prepare($conn, "SELECT * FROM clients WHERE id = ?");
+        mysqli_stmt_bind_param($stmt, "i", $id);
+        mysqli_stmt_execute($stmt);
+        $result = mysqli_stmt_get_result($stmt);
         if ($row = mysqli_fetch_assoc($result)) {
             $client_id = $row['id'];
             $client_name = $row['name'];
             $client_code = $row['client_code'];
             $has_client = true;
         }
+        mysqli_stmt_close($stmt);
     }
     ob_start();
     ?>
@@ -355,7 +420,10 @@ if ($page == 'contacts') {
 if ($page == 'contact_form') {
     if (isset($_GET['id'])) {
         $id = (int)$_GET['id'];
-        $result = mysqli_query($conn, "SELECT * FROM contacts WHERE id = $id");
+        $stmt = mysqli_prepare($conn, "SELECT * FROM contacts WHERE id = ?");
+        mysqli_stmt_bind_param($stmt, "i", $id);
+        mysqli_stmt_execute($stmt);
+        $result = mysqli_stmt_get_result($stmt);
         if ($row = mysqli_fetch_assoc($result)) {
             $contact_id = $row['id'];
             $contact_name = $row['name'];
@@ -363,6 +431,7 @@ if ($page == 'contact_form') {
             $contact_email = $row['email'];
             $has_contact = true;
         }
+        mysqli_stmt_close($stmt);
     }
     ob_start();
     ?>
